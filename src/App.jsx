@@ -10,6 +10,7 @@ import {
 const KEY_LOG = 'training-log';
 const KEY_CATALOG = 'exercise-catalog';
 
+// カラーパレット
 const PLATE = {
   red: '#C8433A',
   blue: '#3B7DC4',
