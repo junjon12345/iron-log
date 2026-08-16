@@ -292,7 +292,7 @@ export default function App() {
   return (
     <div style={styles.root}>
       <style>{`
-        @import url('https://fonts.googleapis.com/css2?family=Bebas+Neue&family=Inter:wght@400;500;600;700&family=Roboto+Mono:wght@400;600&display=swap');
+        @import url('https://fonts.googleapis.com/css2?family=Bebas+Neue&family=Noto+Sans+JP:wght@400;500;600;700&family=Roboto+Mono:wght@400;600&display=swap');
         * { box-sizing: border-box; }
         .wt-scroll::-webkit-scrollbar { width: 0; height: 0; }
         button { font-family: inherit; cursor: pointer; }
@@ -395,7 +395,7 @@ function NavButton({ icon, label, active, onClick, accent }) {
       >
         {icon}
       </div>
-      <span style={{ fontSize: 11, marginTop: 4, fontFamily: "'Inter', sans-serif" }}>{label}</span>
+      <span style={{ fontSize: 11, marginTop: 4, fontFamily: "'Noto Sans JP', sans-serif" }}>{label}</span>
     </button>
   );
 }
@@ -485,7 +485,7 @@ function LegendDot({ color, label }) {
   return (
     <div style={{ display: 'flex', alignItems: 'center', gap: 5 }}>
       <div style={{ width: 7, height: 7, borderRadius: '50%', background: color }} />
-      <span style={{ fontSize: 11, color: '#8E8E93', fontFamily: "'Inter', sans-serif" }}>{label}</span>
+      <span style={{ fontSize: 11, color: '#8E8E93', fontFamily: "'Noto Sans JP', sans-serif" }}>{label}</span>
     </div>
   );
 }
@@ -713,7 +713,7 @@ const styles = {
     background: '#141416',
     display: 'flex',
     justifyContent: 'center',
-    fontFamily: "'Inter', sans-serif",
+    fontFamily: "'Noto Sans JP', sans-serif",
   },
   phoneFrame: {
     width: '100%',
@@ -763,9 +763,10 @@ const styles = {
     marginBottom: 14,
   },
   monthLabel: {
-    fontFamily: "'Bebas Neue', sans-serif",
-    fontSize: 20,
-    letterSpacing: 1,
+    fontFamily: "'Noto Sans JP', sans-serif",
+    fontWeight: 700,
+    fontSize: 18,
+    letterSpacing: 0.5,
     color: '#F2EFE9',
   },
   iconBtn: {
@@ -787,7 +788,7 @@ const styles = {
     textAlign: 'center',
     fontSize: 11,
     padding: '4px 0',
-    fontFamily: "'Inter', sans-serif",
+    fontFamily: "'Noto Sans JP', sans-serif",
   },
   grid: {
     display: 'grid',
@@ -819,9 +820,10 @@ const styles = {
     marginBottom: 16,
   },
   dayHeaderLabel: {
-    fontFamily: "'Bebas Neue', sans-serif",
-    fontSize: 22,
-    letterSpacing: 1,
+    fontFamily: "'Noto Sans JP', sans-serif",
+    fontWeight: 700,
+    fontSize: 19,
+    letterSpacing: 0.3,
     color: '#F2EFE9',
   },
   emptyState: {
@@ -983,7 +985,7 @@ const styles = {
     padding: '10px 12px',
     color: '#F2EFE9',
     fontSize: 14,
-    fontFamily: "'Inter', sans-serif",
+    fontFamily: "'Noto Sans JP', sans-serif",
   },
   statsCard: {
     background: '#212124',
