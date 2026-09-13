@@ -1,6 +1,6 @@
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useRef } from 'react';
 import {
-  ChevronLeft, ChevronRight, Plus, X, TrendingUp,
+  ChevronLeft, ChevronRight, Plus, X, TrendingUp, ChevronUp, ChevronDown, Minus, Star,
   CalendarDays, Trash2, ArrowLeft, Dumbbell, Check, Download, Settings as SettingsIcon,
   SlidersHorizontal, Database, Bell, LogIn, LogOut, Cloud
 } from 'lucide-react';
@@ -73,14 +73,6 @@ function fmtDateLabel(dateStr) {
   return `${m}月${d}日`;
 }
 
-function volumeTier(total) {
-  if (total >= 7000) return 'red';
-  if (total >= 4000) return 'blue';
-  if (total >= 2000) return 'yellow';
-  if (total > 0) return 'green';
-  return null;
-}
-
 function buildCalendarCells(monthCursor) {
   const year = monthCursor.getFullYear();
   const month = monthCursor.getMonth();
@@ -91,17 +83,6 @@ function buildCalendarCells(monthCursor) {
   for (let i = 0; i < startWeekday; i++) cells.push(null);
   for (let d = 1; d <= daysInMonth; d++) cells.push(new Date(year, month, d));
   return cells;
-}
-
-function dayVolume(entries) {
-  if (!entries) return 0;
-  let total = 0;
-  entries.forEach((ex) => {
-    (ex.sets || []).forEach((s) => {
-      total += (s.weight || 0) * (s.reps || 0);
-    });
-  });
-  return total;
 }
 
 function getExerciseHistory(log, exerciseName) {
@@ -127,48 +108,29 @@ function bestSet(sets) {
   return best;
 }
 
-function suggestNext(history) {
-  if (!history.length) return null;
-  const last = history[history.length - 1];
-  const best = bestSet(last.sets);
-  if (!best || !best.weight || !best.reps) return null;
-  if (best.reps >= 10) {
-    return {
-      weight: round1(best.weight + 2.5),
-      reps: Math.max(best.reps - 4, 5),
-      note: `前回 ${best.weight}kg×${best.reps}回。そろそろ重量アップの目安です`,
-    };
-  }
-  return {
-    weight: best.weight,
-    reps: best.reps + 1,
-    note: `前回 ${best.weight}kg×${best.reps}回。回数を1つ増やしてみましょう`,
-  };
+// 日付ごとに「その日、何かの種目で自己ベスト（1RM）を更新したか」を判定する
+function computePRDates(log) {
+  const perExerciseBest = {};
+  const prDates = new Set();
+  Object.keys(log)
+    .sort()
+    .forEach((date) => {
+      (log[date] || []).forEach((entry) => {
+        const best = bestSet(entry.sets);
+        if (!best || !best.weight || !best.reps) return;
+        const e1rm = estOneRM(best.weight, best.reps);
+        const prevBest = perExerciseBest[entry.exercise] || 0;
+        if (e1rm > prevBest) {
+          perExerciseBest[entry.exercise] = e1rm;
+          prDates.add(date);
+        }
+      });
+    });
+  return prDates;
 }
 
-function PlateStack({ tier }) {
-  const order = ['green', 'yellow', 'blue', 'red'];
-  const idx = order.indexOf(tier);
-  const count = idx >= 0 ? idx + 1 : 0;
-  return (
-    <svg width="72" height="40" viewBox="0 0 72 40">
-      <line x1="4" y1="20" x2="68" y2="20" stroke="#5A5A5E" strokeWidth="4" strokeLinecap="round" />
-      {order.slice(0, count).map((c, i) => (
-        <rect
-          key={c}
-          x={10 + i * 14}
-          y={6}
-          width="10"
-          height="28"
-          rx="2"
-          fill={PLATE[c]}
-        />
-      ))}
-      {count === 0 && (
-        <rect x="10" y="6" width="10" height="28" rx="2" fill={PLATE.chalk} opacity="0.4" />
-      )}
-    </svg>
-  );
+function hasEntries(entries) {
+  return !!(entries && entries.length && entries.some((e) => e.sets && e.sets.length));
 }
 
 function exportCSV(log) {
@@ -545,6 +507,7 @@ function NavButton({ icon, label, active, onClick, accent }) {
 
 function CalendarView({ monthCursor, setMonthCursor, cells, log, todayStr, openDay }) {
   const monthLabel = `${monthCursor.getFullYear()}年 ${monthCursor.getMonth() + 1}月`;
+  const prDates = useMemo(() => computePRDates(log), [log]);
 
   function shiftMonth(delta) {
     setMonthCursor(new Date(monthCursor.getFullYear(), monthCursor.getMonth() + delta, 1));
@@ -581,8 +544,8 @@ function CalendarView({ monthCursor, setMonthCursor, cells, log, todayStr, openD
           if (!date) return <div key={`b${i}`} style={styles.dayCell} />;
           const dateStr = fmtDate(date);
           const entries = log[dateStr];
-          const total = dayVolume(entries);
-          const tier = volumeTier(total);
+          const trained = hasEntries(entries);
+          const isPR = prDates.has(dateStr);
           const isToday = dateStr === todayStr;
           return (
             <button
@@ -597,17 +560,20 @@ function CalendarView({ monthCursor, setMonthCursor, cells, log, todayStr, openD
               <span style={{ fontSize: 13, color: isToday ? '#F2EFE9' : '#C7C6C9' }}>
                 {date.getDate()}
               </span>
-              <div style={{ height: 6, marginTop: 3, display: 'flex', justifyContent: 'center' }}>
-                {tier && (
+              <div style={{ height: 12, marginTop: 2, display: 'flex', justifyContent: 'center', alignItems: 'center' }}>
+                {isPR ? (
+                  <Star size={11} color={PLATE.yellow} fill={PLATE.yellow} />
+                ) : trained ? (
                   <div
                     style={{
                       width: 6,
                       height: 6,
                       borderRadius: '50%',
-                      background: PLATE[tier],
+                      background: PLATE.chalk,
+                      opacity: 0.6,
                     }}
                   />
-                )}
+                ) : null}
               </div>
             </button>
           );
@@ -615,20 +581,118 @@ function CalendarView({ monthCursor, setMonthCursor, cells, log, todayStr, openD
       </div>
 
       <div style={styles.legend}>
-        <LegendDot color={PLATE.green} label="軽め" />
-        <LegendDot color={PLATE.yellow} label="普通" />
-        <LegendDot color={PLATE.blue} label="高負荷" />
-        <LegendDot color={PLATE.red} label="最大級" />
+        <LegendDot color={PLATE.chalk} label="トレーニングした日" dim />
+        <LegendDot color={PLATE.yellow} label="自己ベスト更新" star />
       </div>
     </div>
   );
 }
 
-function LegendDot({ color, label }) {
+function LegendDot({ color, label, star, dim }) {
   return (
     <div style={{ display: 'flex', alignItems: 'center', gap: 5 }}>
-      <div style={{ width: 7, height: 7, borderRadius: '50%', background: color }} />
+      {star ? (
+        <Star size={10} color={color} fill={color} />
+      ) : (
+        <div style={{ width: 7, height: 7, borderRadius: '50%', background: color, opacity: dim ? 0.6 : 1 }} />
+      )}
       <span style={{ fontSize: 11, color: '#8E8E93', fontFamily: "'Noto Sans JP', sans-serif" }}>{label}</span>
+    </div>
+  );
+}
+
+function SplitSwipeZone({ weight, reps, onWeightChange, onRepsChange }) {
+  const dragRef = useRef(null); // { side, startY, startValue, lastSteps }
+  const [activeSide, setActiveSide] = useState(null);
+
+  function vibrate() {
+    if (typeof navigator !== 'undefined' && navigator.vibrate) {
+      try {
+        navigator.vibrate(8);
+      } catch (e) {
+        /* 非対応端末は無視 */
+      }
+    }
+  }
+
+  function start(side, clientY) {
+    const startValue = side === 'weight' ? parseFloat(weight) || 0 : parseInt(reps, 10) || 0;
+    dragRef.current = { side, startY: clientY, startValue, lastSteps: 0 };
+    setActiveSide(side);
+  }
+
+  function move(clientY) {
+    if (!dragRef.current) return;
+    const { side, startY, startValue } = dragRef.current;
+    const pxPerStep = side === 'weight' ? 22 : 16;
+    const stepSize = side === 'weight' ? 5 : 1;
+    const deltaY = startY - clientY; // 上方向が正
+    const steps = Math.round(deltaY / pxPerStep);
+    if (steps !== dragRef.current.lastSteps) {
+      dragRef.current.lastSteps = steps;
+      const next = Math.max(0, startValue + steps * stepSize);
+      if (side === 'weight') onWeightChange(String(next));
+      else onRepsChange(String(next));
+      vibrate();
+    }
+  }
+
+  function end() {
+    dragRef.current = null;
+    setActiveSide(null);
+  }
+
+  return (
+    <div style={styles.splitSwipeContainer}>
+      <div
+        style={{ ...styles.splitSwipeHalf, ...(activeSide === 'weight' ? styles.splitSwipeHalfActive : {}) }}
+        onTouchStart={(e) => start('weight', e.touches[0].clientY)}
+        onTouchMove={(e) => {
+          e.preventDefault();
+          move(e.touches[0].clientY);
+        }}
+        onTouchEnd={end}
+        onMouseDown={(e) => start('weight', e.clientY)}
+        onMouseMove={(e) => {
+          if (dragRef.current && dragRef.current.side === 'weight') move(e.clientY);
+        }}
+        onMouseUp={end}
+        onMouseLeave={end}
+      >
+        <ChevronUp size={16} color="#6B6B6F" />
+        <div style={styles.swipeValue}>
+          {weight || '0'}
+          <span style={styles.swipeUnit}>kg</span>
+        </div>
+        <ChevronDown size={16} color="#6B6B6F" />
+        <div style={styles.swipeHint}>重量</div>
+      </div>
+
+      <div style={styles.splitDivider} />
+
+      <div
+        style={{ ...styles.splitSwipeHalf, ...(activeSide === 'reps' ? styles.splitSwipeHalfActive : {}) }}
+        onTouchStart={(e) => start('reps', e.touches[0].clientY)}
+        onTouchMove={(e) => {
+          e.preventDefault();
+          move(e.touches[0].clientY);
+        }}
+        onTouchEnd={end}
+        onMouseDown={(e) => start('reps', e.clientY)}
+        onMouseMove={(e) => {
+          if (dragRef.current && dragRef.current.side === 'reps') move(e.clientY);
+        }}
+        onMouseUp={end}
+        onMouseLeave={end}
+      >
+        <ChevronUp size={16} color="#6B6B6F" />
+        <div style={styles.swipeValue}>
+          {reps || '0'}
+          <span style={styles.swipeUnit}>回</span>
+        </div>
+        <ChevronDown size={16} color="#6B6B6F" />
+        <div style={styles.swipeHint}>回数</div>
+      </div>
     </div>
   );
 }
@@ -654,8 +718,6 @@ function DayView({
       )}
 
       {dayEntries.map((entry) => {
-        const history = getExerciseHistory(log, entry.exercise).filter((h) => h.date < selectedDate);
-        const suggestion = suggestNext(history);
         const lastSetWeight =
           autoFillLastWeight && entry.sets.length
             ? String(entry.sets[entry.sets.length - 1].weight)
@@ -675,8 +737,12 @@ function DayView({
                 {entry.sets.map((s, i) => (
                   <div key={i} style={styles.setRow}>
                     <span style={styles.setIdx}>{i + 1}</span>
-                    <span style={styles.setVal}>{s.weight}kg × {s.reps}</span>
-                    <span style={styles.setE1rm}>e1RM {round1(estOneRM(s.weight, s.reps))}kg</span>
+                    <span style={styles.setVal}>
+                      <span style={styles.setValNum}>{s.weight}</span>kg
+                      <span style={styles.setValX}>×</span>
+                      <span style={styles.setValNum}>{s.reps}</span>
+                    </span>
+                    <span style={styles.setE1rm}>1RM {round1(estOneRM(s.weight, s.reps))}kg</span>
                     <button style={styles.trashBtnSm} onClick={() => removeSet(entry.id, i)}>
                       <X size={13} color="#6B6B6F" />
                     </button>
@@ -685,75 +751,45 @@ function DayView({
               </div>
             )}
 
-            {suggestion && (
-              <button
-                style={styles.suggestionBanner}
-                onClick={() =>
-                  setSetDraft((d) => ({
-                    ...d,
-                    [entry.id]: { weight: String(suggestion.weight), reps: String(suggestion.reps) },
-                  }))
+            <div style={styles.setInputPanel}>
+              <SplitSwipeZone
+                weight={draft.weight}
+                reps={draft.reps}
+                onWeightChange={(v) =>
+                  setSetDraft((d) => ({ ...d, [entry.id]: { ...draft, weight: v } }))
                 }
-              >
-                <span style={styles.suggestionText}>
-                  次回目安 <b>{suggestion.weight}kg × {suggestion.reps}</b>
-                </span>
-                <span style={styles.suggestionNote}>{suggestion.note}</span>
-              </button>
-            )}
-
-            <div style={styles.addSetRow}>
-              <input
-                type="number"
-                inputMode="decimal"
-                placeholder="重量kg"
-                value={draft.weight}
-                onChange={(e) =>
-                  setSetDraft((d) => ({ ...d, [entry.id]: { ...draft, weight: e.target.value } }))
+                onRepsChange={(v) =>
+                  setSetDraft((d) => ({ ...d, [entry.id]: { ...draft, reps: v } }))
                 }
-                style={styles.numInputWeight}
               />
-              <select
-                defaultValue=""
-                onMouseDown={(e) => {
-                  e.currentTarget.value = nearestWeightOption(draft.weight);
-                }}
-                onTouchStart={(e) => {
-                  e.currentTarget.value = nearestWeightOption(draft.weight);
-                }}
-                onFocus={(e) => {
-                  e.currentTarget.value = nearestWeightOption(draft.weight);
-                }}
-                onChange={(e) => {
-                  const chosen = e.target.value;
-                  if (!chosen) return;
-                  setSetDraft((d) => ({ ...d, [entry.id]: { ...draft, weight: chosen } }));
-                  e.target.value = '';
-                  e.target.blur();
-                }}
-                style={styles.weightSelect}
-              >
-                <option value="" disabled hidden>▼</option>
-                {WEIGHT_OPTIONS.map((w) => (
-                  <option key={w} value={w}>{w}kg</option>
-                ))}
-              </select>
-              <span style={styles.xLabel}>×</span>
-              <input
-                type="number"
-                inputMode="numeric"
-                placeholder="回数"
-                value={draft.reps}
-                onChange={(e) =>
-                  setSetDraft((d) => ({ ...d, [entry.id]: { ...draft, reps: e.target.value } }))
-                }
-                style={styles.numInputSm}
-              />
+              <div style={styles.manualInputRow}>
+                <input
+                  type="number"
+                  inputMode="decimal"
+                  placeholder="重量を手入力"
+                  value={draft.weight}
+                  onChange={(e) =>
+                    setSetDraft((d) => ({ ...d, [entry.id]: { ...draft, weight: e.target.value } }))
+                  }
+                  style={styles.manualInputHalf}
+                />
+                <input
+                  type="number"
+                  inputMode="numeric"
+                  placeholder="回数を手入力"
+                  value={draft.reps}
+                  onChange={(e) =>
+                    setSetDraft((d) => ({ ...d, [entry.id]: { ...draft, reps: e.target.value } }))
+                  }
+                  style={styles.manualInputHalf}
+                />
+              </div>
               <button
-                style={styles.addSetBtn}
+                style={styles.bigConfirmBtn}
                 onClick={() => addSet(entry.id, draft.weight, draft.reps)}
               >
-                <Check size={16} color="#fff" />
+                <Check size={20} color="#fff" />
+                <span>このセットを記録</span>
               </button>
             </div>
           </div>
@@ -812,8 +848,6 @@ function ProgressView({ log, allExerciseNames, selectedExercise, setSelectedExer
   });
   const latestBest = history.length ? bestSet(history[history.length - 1].sets) : null;
   const currentE1rm = latestBest ? round1(estOneRM(latestBest.weight, latestBest.reps)) : 0;
-  const tier = volumeTier(currentE1rm * 40);
-  const suggestion = suggestNext(history);
 
   const allTimeBest = history.reduce((acc, h) => {
     const b = bestSet(h.sets);
@@ -842,11 +876,10 @@ function ProgressView({ log, allExerciseNames, selectedExercise, setSelectedExer
         <>
           <div style={styles.statsCard}>
             <div>
-              <div style={styles.statsLabel}>推定1RM</div>
+              <div style={styles.statsLabel}>1RM</div>
               <div style={styles.bigNumber}>{currentE1rm}<span style={styles.bigNumberUnit}>kg</span></div>
               <div style={styles.statsSub}>自己ベスト {round1(allTimeBest.val)}kg（{allTimeBest.weight}kg×{allTimeBest.reps}）</div>
             </div>
-            <PlateStack tier={tier} />
           </div>
 
           <div style={styles.chartCard}>
@@ -858,22 +891,13 @@ function ProgressView({ log, allExerciseNames, selectedExercise, setSelectedExer
                 <Tooltip
                   contentStyle={{ background: '#242427', border: '1px solid #3A3A3E', borderRadius: 8, fontSize: 12 }}
                   labelStyle={{ color: '#F2EFE9' }}
-                  formatter={(v) => [`${v}kg`, '推定1RM']}
+                  formatter={(v) => [`${v}kg`, '1RM']}
                 />
                 <Line type="monotone" dataKey="e1rm" stroke={PLATE.red} strokeWidth={2.5} dot={{ fill: PLATE.red, r: 3 }} />
               </LineChart>
             </ResponsiveContainer>
           </div>
 
-          {suggestion && (
-            <div style={styles.suggestionCardBig}>
-              <div style={styles.statsLabel}>次回の目安</div>
-              <div style={{ ...styles.bigNumber, fontSize: 30 }}>
-                {suggestion.weight}kg × {suggestion.reps}
-              </div>
-              <div style={styles.statsSub}>{suggestion.note}</div>
-            </div>
-          )}
         </>
       )}
     </div>
@@ -1159,29 +1183,104 @@ const styles = {
     color: '#F2EFE9',
     flex: 1,
   },
+  setValNum: {
+    display: 'inline-block',
+    minWidth: 30,
+    textAlign: 'right',
+  },
+  setValX: {
+    display: 'inline-block',
+    minWidth: 20,
+    textAlign: 'center',
+  },
   setE1rm: {
     color: '#8E8E93',
     fontSize: 11,
   },
-  suggestionBanner: {
-    width: '100%',
-    background: 'rgba(200,67,58,0.12)',
-    border: `1px solid rgba(200,67,58,0.35)`,
-    borderRadius: 8,
-    padding: '8px 10px',
-    marginBottom: 10,
-    textAlign: 'left',
+  setInputPanel: {
+    background: '#1B1B1D',
+    border: '1px solid #2E2E32',
+    borderRadius: 14,
+    padding: 14,
+    marginTop: 4,
+  },
+  splitSwipeContainer: {
+    display: 'flex',
+    alignItems: 'stretch',
+    background: '#141416',
+    border: '1px solid #333336',
+    borderRadius: 12,
+    overflow: 'hidden',
+  },
+  splitSwipeHalf: {
+    flex: 1,
+    minWidth: 0,
     display: 'flex',
     flexDirection: 'column',
-    gap: 2,
+    alignItems: 'center',
+    padding: '20px 4px 14px',
+    touchAction: 'none',
+    userSelect: 'none',
+    cursor: 'ns-resize',
   },
-  suggestionText: {
-    fontSize: 12.5,
+  splitSwipeHalfActive: {
+    background: 'rgba(200,67,58,0.12)',
+  },
+  splitDivider: {
+    width: 1,
+    background: '#333336',
+  },
+  swipeValue: {
+    fontFamily: "'Bebas Neue', sans-serif",
+    fontSize: 38,
     color: '#F2EFE9',
+    lineHeight: 1.1,
+    margin: '4px 0',
+    whiteSpace: 'nowrap',
   },
-  suggestionNote: {
-    fontSize: 10.5,
-    color: '#B98F8B',
+  swipeUnit: {
+    fontSize: 14,
+    color: '#8E8E93',
+    marginLeft: 4,
+    fontFamily: "'Noto Sans JP', sans-serif",
+  },
+  swipeHint: {
+    fontSize: 11,
+    color: '#6B6B6F',
+    marginTop: 6,
+  },
+  manualInputRow: {
+    display: 'flex',
+    gap: 8,
+    marginTop: 10,
+  },
+  manualInputHalf: {
+    flex: 1,
+    minWidth: 0,
+    background: '#141416',
+    border: '1px solid #333336',
+    borderRadius: 10,
+    padding: '12px 8px',
+    color: '#F2EFE9',
+    fontSize: 16,
+    fontFamily: "'Roboto Mono', monospace",
+    textAlign: 'center',
+  },
+  bigConfirmBtn: {
+    width: '100%',
+    marginTop: 16,
+    background: PLATE.red,
+    border: 'none',
+    borderRadius: 12,
+    padding: '16px 0',
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+    color: '#fff',
+    fontSize: 16,
+    fontWeight: 700,
+    fontFamily: "'Noto Sans JP', sans-serif",
   },
   addSetRow: {
     display: 'flex',
@@ -1323,12 +1422,6 @@ const styles = {
     borderRadius: 12,
     padding: '12px 4px 4px 4px',
     marginBottom: 14,
-  },
-  suggestionCardBig: {
-    background: 'rgba(200,67,58,0.10)',
-    border: '1px solid rgba(200,67,58,0.3)',
-    borderRadius: 12,
-    padding: 16,
   },
   settingsRow: {
     display: 'flex',
