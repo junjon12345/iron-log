@@ -1,16 +1,37 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import {
   ChevronLeft, ChevronRight, Plus, X, TrendingUp,
-  CalendarDays, Trash2, ArrowLeft, Dumbbell, Check, Download
+  CalendarDays, Trash2, ArrowLeft, Dumbbell, Check, Download, Settings as SettingsIcon,
+  SlidersHorizontal, Database, Bell, LogIn, LogOut, Cloud
 } from 'lucide-react';
 import {
   LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer
 } from 'recharts';
+import { initializeApp } from 'firebase/app';
+import {
+  getAuth, GoogleAuthProvider, signInWithPopup, signOut, onAuthStateChanged
+} from 'firebase/auth';
+import { getFirestore, doc, getDoc, setDoc } from 'firebase/firestore';
 
 const KEY_LOG = 'training-log';
 const KEY_CATALOG = 'exercise-catalog';
+const KEY_SETTINGS = 'app-settings';
+const DEFAULT_SETTINGS = { autoFillLastWeight: true };
 
-// カラーパレット
+// Firebase設定（公開して問題ない識別情報。実際のアクセス制御はFirestoreのセキュリティルール側で行う）
+const firebaseConfig = {
+  apiKey: "AIzaSyD2H4xwEg3YJTPk_YSJduSKILrrawHooYI",
+  authDomain: "iron-log-9328e.firebaseapp.com",
+  projectId: "iron-log-9328e",
+  storageBucket: "iron-log-9328e.firebasestorage.app",
+  messagingSenderId: "148505972312",
+  appId: "1:148505972312:web:c1302f9d6c25cabe4e042d",
+};
+const firebaseApp = initializeApp(firebaseConfig);
+const auth = getAuth(firebaseApp);
+const db = getFirestore(firebaseApp);
+const googleProvider = new GoogleAuthProvider();
+
 const PLATE = {
   red: '#C8433A',
   blue: '#3B7DC4',
@@ -20,10 +41,20 @@ const PLATE = {
 };
 
 const WEEKDAYS = ['日', '月', '火', '水', '木', '金', '土'];
+const WEIGHT_OPTIONS = Array.from({ length: 60 }, (_, i) => (i + 1) * 5); // 5kg〜300kg (5kg刻み)
+
+function nearestWeightOption(rawValue) {
+  const n = parseFloat(rawValue);
+  if (isNaN(n) || n < 0) return '';
+  // 5kg単位で切り捨てる（例: 145→145, 82→80, 89→85）。5kg未満は最小値の5kgに揃える
+  const target = Math.max(5, Math.floor(n / 5) * 5);
+  return WEIGHT_OPTIONS.includes(target) ? String(target) : '';
+}
 
 function estOneRM(weight, reps) {
   if (!weight || !reps) return 0;
-  return weight * (1 + reps / 30);
+  // O'Connor式: 1RM = 重量 × (1 + 0.025 × 回数)
+  return weight * (1 + 0.025 * reps);
 }
 
 function round1(n) {
@@ -175,6 +206,7 @@ function exportCSV(log) {
 export default function App() {
   const [log, setLog] = useState({});
   const [catalog, setCatalog] = useState([]);
+  const [settings, setSettings] = useState(DEFAULT_SETTINGS);
   const [loading, setLoading] = useState(true);
   const [saveError, setSaveError] = useState(null);
   const [view, setView] = useState('calendar');
@@ -184,6 +216,9 @@ export default function App() {
   const [newExerciseName, setNewExerciseName] = useState('');
   const [addingExercise, setAddingExercise] = useState(false);
   const [setDraft, setSetDraft] = useState({});
+  const [user, setUser] = useState(null);
+  const [authLoading, setAuthLoading] = useState(true);
+  const [syncing, setSyncing] = useState(false);
 
   useEffect(() => {
     let logData = {};
@@ -200,10 +235,82 @@ export default function App() {
     } catch (e) {
       /* no data yet */
     }
+    let settingsData = DEFAULT_SETTINGS;
+    try {
+      const raw3 = window.localStorage.getItem(KEY_SETTINGS);
+      if (raw3) settingsData = { ...DEFAULT_SETTINGS, ...JSON.parse(raw3) };
+    } catch (e) {
+      /* no data yet */
+    }
     setLog(logData);
     setCatalog(catData);
+    setSettings(settingsData);
     setLoading(false);
   }, []);
+
+  // Googleログイン状態を監視し、ログインしていればクラウドのデータを読み込む
+  useEffect(() => {
+    const unsubscribe = onAuthStateChanged(auth, async (firebaseUser) => {
+      setUser(firebaseUser);
+      setAuthLoading(false);
+      if (firebaseUser) {
+        setSyncing(true);
+        try {
+          const ref = doc(db, 'users', firebaseUser.uid);
+          const snap = await getDoc(ref);
+          if (snap.exists()) {
+            const data = snap.data();
+            if (data.log) {
+              setLog(data.log);
+              window.localStorage.setItem(KEY_LOG, JSON.stringify(data.log));
+            }
+            if (data.catalog) {
+              setCatalog(data.catalog);
+              window.localStorage.setItem(KEY_CATALOG, JSON.stringify(data.catalog));
+            }
+            if (data.settings) {
+              const merged = { ...DEFAULT_SETTINGS, ...data.settings };
+              setSettings(merged);
+              window.localStorage.setItem(KEY_SETTINGS, JSON.stringify(merged));
+            }
+          } else {
+            // 初回ログイン: 今この端末にあるデータをクラウドの初期データとしてアップロード
+            await setDoc(ref, { log, catalog, settings });
+          }
+          setSaveError(null);
+        } catch (e) {
+          setSaveError('クラウド同期に失敗しました');
+        } finally {
+          setSyncing(false);
+        }
+      }
+    });
+    return () => unsubscribe();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  async function handleLogin() {
+    try {
+      await signInWithPopup(auth, googleProvider);
+    } catch (e) {
+      setSaveError('ログインに失敗しました');
+    }
+  }
+
+  async function handleLogout() {
+    try {
+      await signOut(auth);
+    } catch (e) {
+      setSaveError('ログアウトに失敗しました');
+    }
+  }
+
+  function syncToCloud(partialData) {
+    if (!user) return;
+    setDoc(doc(db, 'users', user.uid), partialData, { merge: true }).catch(() => {
+      setSaveError('クラウド同期に失敗しました');
+    });
+  }
 
   function persistLog(newLog) {
     setLog(newLog);
@@ -213,6 +320,7 @@ export default function App() {
     } catch (e) {
       setSaveError('保存に失敗しました');
     }
+    syncToCloud({ log: newLog });
   }
 
   function persistCatalog(newCatalog) {
@@ -222,6 +330,18 @@ export default function App() {
     } catch (e) {
       setSaveError('保存に失敗しました');
     }
+    syncToCloud({ catalog: newCatalog });
+  }
+
+  function toggleSetting(key) {
+    const next = { ...settings, [key]: !settings[key] };
+    setSettings(next);
+    try {
+      window.localStorage.setItem(KEY_SETTINGS, JSON.stringify(next));
+    } catch (e) {
+      setSaveError('保存に失敗しました');
+    }
+    syncToCloud({ settings: next });
   }
 
   const todayStr = fmtDate(new Date());
@@ -279,8 +399,13 @@ export default function App() {
         : e
     );
     persistLog(newLog);
-    setSetDraft((d) => ({ ...d, [entryId]: { weight: '', reps: '' } }));
+    // 設定がオンの場合のみ、同じ種目の2セット目以降に前回の重量を初期値として残す
+    setSetDraft((d) => ({
+      ...d,
+      [entryId]: { weight: settings.autoFillLastWeight ? String(weight) : '', reps: '' },
+    }));
   }
+
 
   function removeSet(entryId, setIdx) {
     const newLog = { ...log };
@@ -306,9 +431,14 @@ export default function App() {
             <Dumbbell size={20} color={PLATE.red} strokeWidth={2.5} />
             <span style={styles.headerTitle}>IRON LOG</span>
           </div>
-          <button style={styles.exportBtn} onClick={() => exportCSV(log)} title="CSV出力">
-            <Download size={17} color="#9A9A9E" />
-          </button>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+            <button style={styles.exportBtn} onClick={() => exportCSV(log)} title="CSV出力">
+              <Download size={17} color="#9A9A9E" />
+            </button>
+            <button style={styles.exportBtn} onClick={() => setView('settings')} title="設定">
+              <SettingsIcon size={17} color="#9A9A9E" />
+            </button>
+          </div>
         </div>
 
         <div style={styles.content} className="wt-scroll">
@@ -340,13 +470,25 @@ export default function App() {
               removeSet={removeSet}
               setDraft={setDraft}
               setSetDraft={setSetDraft}
+              autoFillLastWeight={settings.autoFillLastWeight}
             />
-          ) : (
+          ) : view === 'progress' ? (
             <ProgressView
               log={log}
               allExerciseNames={allExerciseNames}
               selectedExercise={selectedExercise}
               setSelectedExercise={setSelectedExercise}
+            />
+          ) : (
+            <SettingsView
+              onBack={() => setView('calendar')}
+              settings={settings}
+              onToggleSetting={toggleSetting}
+              user={user}
+              authLoading={authLoading}
+              syncing={syncing}
+              onLogin={handleLogin}
+              onLogout={handleLogout}
             />
           )}
           {saveError && <div style={styles.errorBanner}>{saveError}</div>}
@@ -495,6 +637,7 @@ function DayView({
   selectedDate, dayEntries, log, catalog, onBack,
   addingExercise, setAddingExercise, newExerciseName, setNewExerciseName,
   addExerciseToDay, removeExercise, addSet, removeSet, setDraft, setSetDraft,
+  autoFillLastWeight,
 }) {
   return (
     <div style={{ padding: '16px' }}>
@@ -513,7 +656,11 @@ function DayView({
       {dayEntries.map((entry) => {
         const history = getExerciseHistory(log, entry.exercise).filter((h) => h.date < selectedDate);
         const suggestion = suggestNext(history);
-        const draft = setDraft[entry.id] || { weight: '', reps: '' };
+        const lastSetWeight =
+          autoFillLastWeight && entry.sets.length
+            ? String(entry.sets[entry.sets.length - 1].weight)
+            : '';
+        const draft = setDraft[entry.id] || { weight: lastSetWeight, reps: '' };
         return (
           <div key={entry.id} style={styles.exerciseCard}>
             <div style={styles.exerciseCardHeader}>
@@ -564,8 +711,33 @@ function DayView({
                 onChange={(e) =>
                   setSetDraft((d) => ({ ...d, [entry.id]: { ...draft, weight: e.target.value } }))
                 }
-                style={styles.numInput}
+                style={styles.numInputWeight}
               />
+              <select
+                defaultValue=""
+                onMouseDown={(e) => {
+                  e.currentTarget.value = nearestWeightOption(draft.weight);
+                }}
+                onTouchStart={(e) => {
+                  e.currentTarget.value = nearestWeightOption(draft.weight);
+                }}
+                onFocus={(e) => {
+                  e.currentTarget.value = nearestWeightOption(draft.weight);
+                }}
+                onChange={(e) => {
+                  const chosen = e.target.value;
+                  if (!chosen) return;
+                  setSetDraft((d) => ({ ...d, [entry.id]: { ...draft, weight: chosen } }));
+                  e.target.value = '';
+                  e.target.blur();
+                }}
+                style={styles.weightSelect}
+              >
+                <option value="" disabled hidden>▼</option>
+                {WEIGHT_OPTIONS.map((w) => (
+                  <option key={w} value={w}>{w}kg</option>
+                ))}
+              </select>
               <span style={styles.xLabel}>×</span>
               <input
                 type="number"
@@ -704,6 +876,112 @@ function ProgressView({ log, allExerciseNames, selectedExercise, setSelectedExer
           )}
         </>
       )}
+    </div>
+  );
+}
+
+function Toggle({ checked, onChange }) {
+  return (
+    <button
+      onClick={onChange}
+      style={{ ...styles.toggleTrack, background: checked ? PLATE.red : '#3A3A3E' }}
+    >
+      <span style={{ ...styles.toggleKnob, left: checked ? 21 : 3 }} />
+    </button>
+  );
+}
+
+function SettingsView({
+  onBack, settings, onToggleSetting,
+  user, authLoading, syncing, onLogin, onLogout,
+}) {
+  const comingSoonSections = [
+    {
+      icon: <Bell size={18} color="#9A9A9E" />,
+      title: '通知',
+      desc: 'トレーニングリマインダーなど（準備中）',
+    },
+  ];
+
+  return (
+    <div style={{ padding: '16px' }}>
+      <div style={styles.dayHeader}>
+        <button style={styles.iconBtn} onClick={onBack}>
+          <ArrowLeft size={20} color="#F2EFE9" />
+        </button>
+        <span style={styles.dayHeaderLabel}>設定</span>
+        <div style={{ width: 36 }} />
+      </div>
+
+      <div style={styles.settingsGroupLabel}>アカウント</div>
+      <div style={styles.settingsRowActive}>
+        <div style={styles.settingsRowIcon}>
+          {user ? <Cloud size={18} color={PLATE.green} /> : <Database size={18} color="#9A9A9E" />}
+        </div>
+        <div style={{ flex: 1 }}>
+          {authLoading ? (
+            <div style={styles.settingsRowTitle}>確認中...</div>
+          ) : user ? (
+            <>
+              <div style={styles.settingsRowTitle}>{user.displayName || user.email}</div>
+              <div style={styles.settingsRowDesc}>
+                {syncing ? '同期中...' : 'このGoogleアカウントにデータを同期しています'}
+              </div>
+            </>
+          ) : (
+            <>
+              <div style={styles.settingsRowTitle}>ログインしていません</div>
+              <div style={styles.settingsRowDesc}>
+                Googleでログインすると、機種変更してもデータを引き継げます
+              </div>
+            </>
+          )}
+        </div>
+        {!authLoading && (
+          user ? (
+            <button style={styles.authBtn} onClick={onLogout}>
+              <LogOut size={15} color="#9A9A9E" />
+            </button>
+          ) : (
+            <button style={styles.authBtnPrimary} onClick={onLogin}>
+              <LogIn size={15} color="#fff" />
+            </button>
+          )
+        )}
+      </div>
+
+      <div style={styles.settingsGroupLabel}>入力の挙動</div>
+      <div style={styles.settingsRowActive}>
+        <div style={styles.settingsRowIcon}>
+          <SlidersHorizontal size={18} color="#9A9A9E" />
+        </div>
+        <div style={{ flex: 1 }}>
+          <div style={styles.settingsRowTitle}>前回の重量を自動入力</div>
+          <div style={styles.settingsRowDesc}>
+            同じ種目の2セット目以降、前回の重量を最初から入力しておきます
+          </div>
+        </div>
+        <Toggle
+          checked={settings.autoFillLastWeight}
+          onChange={() => onToggleSetting('autoFillLastWeight')}
+        />
+      </div>
+
+      <div style={styles.settingsGroupLabel}>準備中</div>
+      {comingSoonSections.map((s) => (
+        <div key={s.title} style={styles.settingsRow}>
+          <div style={styles.settingsRowIcon}>{s.icon}</div>
+          <div style={{ flex: 1 }}>
+            <div style={styles.settingsRowTitle}>{s.title}</div>
+            <div style={styles.settingsRowDesc}>{s.desc}</div>
+          </div>
+          <ChevronRight size={16} color="#4A4A4E" />
+        </div>
+      ))}
+
+      <div style={styles.settingsFooterNote}>
+        設定できる項目は今後追加していきます
+      </div>
     </div>
   );
 }
@@ -920,6 +1198,17 @@ const styles = {
     width: 90,
     fontFamily: "'Roboto Mono', monospace",
   },
+  numInputWeight: {
+    background: '#141416',
+    border: '1px solid #333336',
+    borderRadius: 8,
+    padding: '8px 6px',
+    color: '#F2EFE9',
+    fontSize: 13,
+    width: 58,
+    textAlign: 'center',
+    fontFamily: "'Roboto Mono', monospace",
+  },
   numInputSm: {
     background: '#141416',
     border: '1px solid #333336',
@@ -927,8 +1216,18 @@ const styles = {
     padding: '8px 10px',
     color: '#F2EFE9',
     fontSize: 13,
-    width: 70,
+    width: 60,
     fontFamily: "'Roboto Mono', monospace",
+  },
+  weightSelect: {
+    background: '#242427',
+    border: '1px solid #333336',
+    borderRadius: 8,
+    padding: '8px 6px',
+    color: '#9A9A9E',
+    fontSize: 12,
+    fontFamily: "'Noto Sans JP', sans-serif",
+    flexShrink: 0,
   },
   xLabel: {
     color: '#6B6B6F',
@@ -1030,6 +1329,96 @@ const styles = {
     border: '1px solid rgba(200,67,58,0.3)',
     borderRadius: 12,
     padding: 16,
+  },
+  settingsRow: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: 12,
+    background: '#212124',
+    borderRadius: 12,
+    padding: '14px 14px',
+    marginBottom: 10,
+    opacity: 0.7,
+  },
+  settingsRowIcon: {
+    width: 34,
+    height: 34,
+    borderRadius: 8,
+    background: '#2A2A2D',
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    flexShrink: 0,
+  },
+  settingsRowTitle: {
+    fontSize: 14,
+    fontWeight: 600,
+    color: '#F2EFE9',
+  },
+  settingsRowDesc: {
+    fontSize: 11.5,
+    color: '#6B6B6F',
+    marginTop: 2,
+  },
+  settingsFooterNote: {
+    textAlign: 'center',
+    fontSize: 11.5,
+    color: '#6B6B6F',
+    marginTop: 20,
+  },
+  settingsRowActive: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: 12,
+    background: '#212124',
+    borderRadius: 12,
+    padding: '14px 14px',
+    marginBottom: 10,
+  },
+  settingsGroupLabel: {
+    fontSize: 11.5,
+    color: '#6B6B6F',
+    margin: '4px 2px 8px',
+  },
+  toggleTrack: {
+    width: 44,
+    height: 26,
+    borderRadius: 13,
+    border: 'none',
+    position: 'relative',
+    flexShrink: 0,
+    padding: 0,
+  },
+  toggleKnob: {
+    position: 'absolute',
+    top: 3,
+    width: 20,
+    height: 20,
+    borderRadius: '50%',
+    background: '#F2EFE9',
+    transition: 'left 0.15s',
+  },
+  authBtn: {
+    background: '#2A2A2D',
+    border: '1px solid #3A3A3E',
+    borderRadius: 8,
+    width: 34,
+    height: 34,
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    flexShrink: 0,
+  },
+  authBtnPrimary: {
+    background: PLATE.red,
+    border: 'none',
+    borderRadius: 8,
+    width: 34,
+    height: 34,
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    flexShrink: 0,
   },
   bottomNav: {
     display: 'flex',
